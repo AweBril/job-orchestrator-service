@@ -1,0 +1,187 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  namespace: {{ .global.NamespaceID }}
+  generateName: soccer
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      nodeSelector:
+        nodeType: {{ .global.NodeType }}
+      restartPolicy: OnFailure      
+
+      initContainers:
+      - name: pull-streamreader
+        image: 737281747633.dkr.ecr.us-east-1.amazonaws.com/mesa/sky-streamreader:v0.0.2-20-gce376c0
+        command: ['sh', '-c', 'echo The app is running']
+
+      - name: pull-engine
+        image: 737281747633.dkr.ecr.us-east-1.amazonaws.com/maf/engine:v2.9.5
+        command: ['sh', '-c', 'echo The app is running']
+
+      - name: pull-framebuffer
+        image: 737281747633.dkr.ecr.us-east-1.amazonaws.com/mesa/framebuffer:v1.0.0-14-g9ece34f
+        command: ['sh', '-c', 'echo The app is running']
+
+      - name: pull-onscreen-ocr
+        image: 737281747633.dkr.ecr.us-east-1.amazonaws.com/maf/onscreen-ocr:v1.9.6
+        command: ['sh', '-c', 'echo The app is running']
+
+      - name: pull-penalty-shootout-detector
+        image: 737281747633.dkr.ecr.us-east-1.amazonaws.com/maf/soccer-penalty-shootout-detector:a83130d
+        command: ['sh', '-c', 'echo The app is running']
+
+      - name: pull-soccer-decorator
+        image: 737281747633.dkr.ecr.us-east-1.amazonaws.com/mesa/soccer-decorator:v1.1.9-1-g35bab6c
+        command: ['sh', '-c', 'echo The app is running']
+
+      - name: pull-soccer-alignment
+        image: 737281747633.dkr.ecr.us-east-1.amazonaws.com/maf/maf-sports-alignment:v5.0.0-31-g6f4835a
+        command: ['sh', '-c', 'echo The app is running']
+
+      - name: wait-for-job-start
+        image: "busybox:1.28"
+        command: ['sh', '-c', "if [ $((A= {{ .global.StartTime }} / 1000 - $(date +%s))) -gt 0 ]; then echo \"sleeping for $A seconds\" && sleep $A && echo \"sleep done\"; fi"]
+
+
+      containers:
+      - name: streamreader
+        image: "737281747633.dkr.ecr.us-east-1.amazonaws.com/mesa/sky-streamreader:v0.0.2-20-gce376c0"
+        imagePullPolicy: Never
+        args:
+        - "-m={{ .streamreader.manifest }}"
+        - "-log-format=Splunk"
+        - "-http-header=X-MediaPackage-CDNIdentifier:{{ .streamreader.CdnIdentifier }}"
+        - "-width=1920"
+        - "-height=1080"
+          {{- if .global.IsVOD }}
+        - "-w=false"
+          {{- else }}
+        - "-w=true"
+          {{- end }}
+        - "-f=tcp://:10001?listen=1&timeout=300s"
+        resources:
+          requests:
+            cpu: "200m"
+
+      - name: engine
+        image: "737281747633.dkr.ecr.us-east-1.amazonaws.com/maf/engine:v2.9.5"
+        imagePullPolicy: Never
+        args: 
+        - "-i=tcp://127.0.0.1:10001?retry=300s"
+        - "-log-format=Splunk"
+        - "-log-level=INFO"
+        - "-nohc"
+        - "-hb=60000"
+        - "-se=600000"
+        - "-disableLogo"
+        - "-imageRate=12"
+        - "-roi=R0 0.671875 0.5527777777777778 0.31354166666666666 0.44166666666666665"
+        - "-inputQueue=600"
+        - "-inputRead=97987"
+          {{- if .global.IsVOD }}
+        - "-time0=0"
+          {{- else }}
+        - "-logQueue=100"
+        - "-streamedtime0"
+          {{- end }}
+        - "-tno=http://localhost:10003/framebuffer/v1/{{ .global.UniqueID }}?method=POST"
+        # - "-o=tcp://:10002?listen=1&timeout=300s"
+        resources:
+          requests:
+            cpu: "4"
+
+      - name: framebuffer
+        image: "737281747633.dkr.ecr.us-east-1.amazonaws.com/mesa/framebuffer:v1.0.0-14-g9ece34f"
+        imagePullPolicy: Never
+        args: 
+        - "-max-length=7200"
+        - "-listen-address=:10003"
+        - "-log-format=Splunk"
+        resources:
+          requests:
+            cpu: "1"
+      
+      - name: onscreen-ocr
+        image: "737281747633.dkr.ecr.us-east-1.amazonaws.com/maf/onscreen-ocr:v1.9.6"
+        imagePullPolicy: Never
+        args: 
+        - "-f=http://localhost:10003/framebuffer/v1"
+        - "-u={{ .global.UniqueID }}"
+        - "-rec=50"
+        - "-m=openvino_maskrcnn_resnet50_v3"
+        - "-fps=2"
+        - "-log-format=Splunk"
+        - "-log-level=DEBUG"
+        # - "-o=redirect+http://service-sports-detector-data-api:9678/sports-detector-data/v1/job/{{ .global.UniqueID }}/detector/onscreen-ocr?method=POST"
+        - "-o=tcp://:10004?listen=2&timeout=300s"
+        resources:
+          requests:
+            cpu: "2"
+
+      # - name: var-detector
+      #   image: "737281747633.dkr.ecr.us-east-1.amazonaws.com/sky/var-detector:var-start-v1.9"
+      #   imagePullPolicy: Never
+      #   args: 
+      #   - "-i=tcp://127.0.0.1:10002?retry=300s"
+      #   - "-o=redirect+http://service-sports-detector-data-api:9678/sports-detector-data/v1/job/{{ .global.UniqueID }}/detector/var-detector?method=POST"
+      #   - "-o=tcp://:10005?listen=1&timeout=300s"
+      #   resources:
+      #     requests:
+      #       cpu: "1"
+
+      - name: penalty-shootout-detector
+        image: "737281747633.dkr.ecr.us-east-1.amazonaws.com/maf/soccer-penalty-shootout-detector:a83130d"
+        imagePullPolicy: Never
+        args: 
+        - "-i=tcp://127.0.0.1:10004?retry=300s"
+        - "-log-format=Splunk"
+        - "-log-level=DEBUG"
+        - "-o=tcp://:10006?listen=1&timeout=300s"
+        # - "-o=redirect+http://service-sports-detector-data-api:9678/sports-detector-data/v1/job/{{ .global.UniqueID }}/detector/penalty-shootout-detector?method=POST"
+        - "--"
+        - "-f=http://localhost:10003/framebuffer/v1"
+        - "-u={{ .global.UniqueID }}"
+        resources:
+          requests:
+            cpu: "1"
+
+      - name: soccer-decorator
+        image: "737281747633.dkr.ecr.us-east-1.amazonaws.com/mesa/soccer-decorator:v1.1.9-1-g35bab6c"
+        imagePullPolicy: Never
+        args: 
+        - "-var-url=tcp://127.0.0.1:10005?retry=300s"
+        - "-shootout-url=tcp://127.0.0.1:10006?retry=300s"
+        - "-farsideHost=https://farside-prod.codebig2.net/"
+        - "-region=us-east-1"
+        - "-stack-suffix=qa1"
+        - "-jobId={{ .global.UniqueID}}"
+        - "-gameId={{ .global.FarsideEventID }}"
+        - "-streamId={{ .global.StreamID }}"
+        - "-log-format=Splunk"
+        - "-log-level=INFO"
+        resources:
+          requests:
+            cpu: "200m"
+
+      - name: soccer-alignment
+        image: "737281747633.dkr.ecr.us-east-1.amazonaws.com/maf/maf-sports-alignment:v5.0.0-31-g6f4835a"
+        imagePullPolicy: Never
+        args: 
+        - "-region=us-east-1"
+        - "-i=tcp://127.0.0.1:10004?retry=300s"
+        - "-execute-frequency=15"
+        - "-fps=2"
+        - "-jobId={{ .global.UniqueID}}"
+        - "-gameId={{ .global.FarsideEventID }}"
+        - "-streamId={{ .global.StreamID }}"
+        - "-offset={{ .soccerAlignment.kickoffTime }}"
+        - "-alignment-data-bucket=mafaas-ue1-qa1-template-testing"
+        - "-gamestate-location=http://service-farside-data-api.maf-analysis:9680/sky-sportsdata-api"
+        - "-log-level=DEBUG"
+        resources:
+          requests:
+            cpu: "1"
+
+      

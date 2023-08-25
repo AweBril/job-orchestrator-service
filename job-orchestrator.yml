@@ -1,0 +1,116 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: job-orchestrator
+  namespace: maf-analysis
+  labels:
+    k8s-app: job-orchestrator
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: job-orchestrator
+  namespace: maf-analysis
+  labels:
+    k8s-app: job-orchestrator
+rules:
+  - apiGroups:
+      - "*"
+    resources:
+      - "*"
+    verbs:
+      - "get"
+      - "watch"
+      - "list"
+      - "create"
+      - "update"
+      - "patch"
+      - "delete"
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  namespace: maf-analysis
+  name: job-orchestrator
+  labels:
+    k8s-app: job-orchestrator
+subjects:
+  - kind: ServiceAccount
+    name: job-orchestrator
+    namespace: maf-analysis
+    apiGroup: ""
+roleRef:
+  kind: ClusterRole
+  name: job-orchestrator
+  apiGroup: ""
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-job-orchestrator
+  namespace: maf-analysis
+  labels:
+    k8s-app: job-orchestrator
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      targetPort: 8080
+      nodePort: 32722
+  type: NodePort
+  selector:
+    k8s-app: job-orchestrator
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: job-orchestrator
+  namespace: maf-analysis
+  labels:
+    maf.deployment: job-orchestrator
+    k8s-app: job-orchestrator
+spec:
+  serviceName: job-orchestrator
+  selector:
+    matchLabels:
+      k8s-app: job-orchestrator
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        k8s-app: job-orchestrator
+    spec:
+      serviceAccountName: job-orchestrator
+      nodeSelector:
+        nodeType: core
+      containers:
+        - name: joborchestrator
+          image: "737281747633.dkr.ecr.us-east-1.amazonaws.com/mesa/maf-job-orchestrator:v0.5.1"
+          env:
+          - name: AWS_REGION
+            value: us-east-1
+          - name: ID
+            value: abc
+          - name: TEMPLATE_BUCKET
+            value: mafaas-ue1-qa1-template-testing
+          - name: MONGO_HOSTNAME
+            value: mafaas-mongo-jobs-qa1.cluster-c5k6n4q5xiym.us-east-1.docdb.amazonaws.com
+          - name: MONGO_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: jobs-docdb
+                key: username
+          - name: MONGO_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: jobs-docdb
+                key: password
+          - name: MONGO_SSL
+            value: "true"
+          - name: MONGO_DATABASE
+            value: jobDb
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: joborchestrator
+      restartPolicy: Always
